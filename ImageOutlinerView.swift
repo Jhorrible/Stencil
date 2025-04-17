@@ -42,6 +42,11 @@ struct ImageOutlinerView: View {
         return horizontalSizeClass == .regular && verticalSizeClass == .compact
     }
 
+    // Debugging Helper Function
+    func printTransformState(label: String) {
+        print("[\(label)] rotationAngle: \(rotationAngle), flipH: \(flipHorizontal), flipV: \(flipVertical), scale: \(currentScale), offset: \(offset)")
+    }
+
     var body: some View {
         GeometryReader { screenGeo in
             ZStack {
@@ -65,7 +70,7 @@ struct ImageOutlinerView: View {
                     ImageEraser(image: imageToEdit) { editedImage in
                         inputImage = editedImage
                         showImageEraser = false
-                        updateProcessedImage() // Use updateProcessedImage
+                        applyContentFilters() // Apply filters after erasing
                     }
                     .edgesIgnoringSafeArea(.all)
                     .transition(.move(edge: .bottom))
@@ -98,9 +103,17 @@ struct ImageOutlinerView: View {
             .sheet(isPresented: $showImagePicker) {
                 ImagePicker(image: $inputImage) {
                     if let _ = inputImage {
-                        updateProcessedImage() // Use updateProcessedImage
+                        resetTransformations() // Reset transformations on image load
+                        applyContentFilters() // Apply filters after image is picked
                     }
                 }
+            }
+            .onAppear {
+                resetTransformations() // Reset transformations on view appear (extra safety)
+                printTransformState(label: "onAppear")
+            }
+            .onChange(of: inputImage) { newValue in
+                printTransformState(label: "onChange(inputImage)")
             }
         }
     }
@@ -110,43 +123,36 @@ struct ImageOutlinerView: View {
     func imageDisplayView(width: CGFloat, height: CGFloat) -> some View {
         ZStack {
             VStack(spacing: 0) {
-                if let processedImage = processedImage {
-                    Image(uiImage: processedImage)
+                if let displayImage = processedImage ?? inputImage {
+                    Image(uiImage: displayImage)
                         .resizable()
                         .scaledToFit()
                         .scaleEffect(currentScale)
                         .offset(offset)
+                        .rotationEffect(Angle(degrees: rotationAngle))
+                        .scaleEffect(x: flipHorizontal ? -1 : 1, y: flipVertical ? -1 : 1)
                         .gesture(
                             MagnificationGesture()
-                                .onChanged { value in currentScale = lastScale * value }
-                                .onEnded { _ in lastScale = currentScale }
+                                .onChanged { value in
+                                    currentScale = lastScale * value
+                                    printTransformState(label: "MagnificationGesture.onChanged")
+                                }
+                                .onEnded { _ in
+                                    lastScale = currentScale
+                                    printTransformState(label: "MagnificationGesture.onEnded")
+                                }
                         )
                         .gesture(
                             DragGesture()
                                 .onChanged { value in
                                     offset = CGSize(width: lastOffset.width + value.translation.width,
                                                     height: lastOffset.height + value.translation.height)
+                                    printTransformState(label: "DragGesture.onChanged")
                                 }
-                                .onEnded { _ in lastOffset = offset }
-                        )
-                } else if let inputImage = inputImage {
-                    Image(uiImage: inputImage)
-                        .resizable()
-                        .scaledToFit()
-                        .scaleEffect(currentScale)
-                        .offset(offset)
-                        .gesture(
-                            MagnificationGesture()
-                                .onChanged { value in currentScale = lastScale * value }
-                                .onEnded { _ in lastScale = currentScale }
-                        )
-                        .gesture(
-                            DragGesture()
-                                .onChanged { value in
-                                    offset = CGSize(width: lastOffset.width + value.translation.width,
-                                                    height: lastOffset.height + value.translation.height)
+                                .onEnded { _ in
+                                    lastOffset = offset
+                                    printTransformState(label: "DragGesture.onEnded")
                                 }
-                                .onEnded { _ in lastOffset = offset }
                         )
                 } else {
                     Text("Select an image to begin").foregroundColor(.gray)
@@ -156,6 +162,9 @@ struct ImageOutlinerView: View {
             .background(Color.white)
             .clipped()
             .cornerRadius(8)
+        }
+        .onChange(of: processedImage) { newValue in
+            printTransformState(label: "imageDisplayView.onChange(processedImage)")
         }
     }
 
@@ -263,6 +272,7 @@ struct ImageOutlinerView: View {
                 action: {
                     currentScale -= 0.1
                     if currentScale < 0.1 { currentScale = 0.1 }
+                    printTransformState(label: "zoomOut")
                 },
                 labelText: "Zoom Out",
                 iconSize: iconSize,
@@ -270,7 +280,10 @@ struct ImageOutlinerView: View {
             )
             iconWithInfoLabel(
                 iconName: "plus.magnifyingglass",
-                action: { currentScale += 0.1 },
+                action: {
+                    currentScale += 0.1
+                    printTransformState(label: "zoomIn")
+                },
                 labelText: "Zoom In",
                 iconSize: iconSize,
                 showInfoMode: showInfoMode
@@ -284,7 +297,7 @@ struct ImageOutlinerView: View {
                 iconName: "rotate.right.fill",
                 action: {
                     rotationAngle -= 90
-                    updateProcessedImage() // Use updateProcessedImage
+                    printTransformState(label: "rotateRight")
                 },
                 labelText: "Rotate Right",
                 iconSize: iconSize,
@@ -294,7 +307,7 @@ struct ImageOutlinerView: View {
                 iconName: "rotate.left.fill",
                 action: {
                     rotationAngle += 90
-                    updateProcessedImage() // Use updateProcessedImage
+                    printTransformState(label: "rotateLeft")
                 },
                 labelText: "Rotate Left",
                 iconSize: iconSize,
@@ -309,7 +322,7 @@ struct ImageOutlinerView: View {
                 iconName: "flip.horizontal.fill",
                 action: {
                     flipHorizontal.toggle()
-                    updateProcessedImage() // Use updateProcessedImage
+                    printTransformState(label: "flipHorizontal")
                 },
                 labelText: "Flip Horizontal",
                 iconSize: iconSize,
@@ -319,7 +332,7 @@ struct ImageOutlinerView: View {
                 iconName: "arrow.up.arrow.down",
                 action: {
                     flipVertical.toggle()
-                    updateProcessedImage() // Use updateProcessedImage
+                    printTransformState(label: "flipVertical")
                 },
                 labelText: "Flip Vertical",
                 iconSize: iconSize,
@@ -343,6 +356,7 @@ struct ImageOutlinerView: View {
             Button("Choose Image") {
                 showImagePicker = true
                 resetTransformations()
+                printTransformState(label: "Choose Image button")
             }
             .buttonStyle(SmallPrimaryButtonStyle())
             .overlay(
@@ -360,7 +374,8 @@ struct ImageOutlinerView: View {
                     contrast = 1.0
                     curves = 1.0
                     lineBoldness = 1.0
-                    updateProcessedImage() // Use updateProcessedImage
+                    applyContentFilters()
+                    printTransformState(label: "Update Image button")
                 }
             }
             .buttonStyle(SmallPrimaryButtonStyle())
@@ -411,7 +426,10 @@ struct ImageOutlinerView: View {
                           width: 120,
                           showInfoMode: showInfoMode)
             )
-            .onChange(of: isGrayscaleEnabled) { _ in updateProcessedImage() } // Use updateProcessedImage
+            .onChange(of: isGrayscaleEnabled) { _ in
+                applyContentFilters()
+                printTransformState(label: "isGrayscaleEnabled.onChange")
+            }
         }
     }
 
@@ -431,13 +449,14 @@ struct ImageOutlinerView: View {
                 contrast = 2.0
                 curves = 2.0
                 lineBoldness = 1.0
-                updateProcessedImage() // Use updateProcessedImage
+                applyContentFilters()
+                printTransformState(label: "Filter 1 button - before delay")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    inputImage = processedImage
                     brightness = -0.11
                     contrast = 1.8
                     curves = 2.0
-                    updateProcessedImage() // Use updateProcessedImage
+                    applyContentFilters()
+                    printTransformState(label: "Filter 1 button - after delay")
                 }
             }
             .buttonStyle(FilterButtonStyle())
@@ -454,7 +473,8 @@ struct ImageOutlinerView: View {
                 contrast = 2.0
                 curves = 1.15
                 lineBoldness = 1.0
-                updateProcessedImage() // Use updateProcessedImage
+                applyContentFilters()
+                printTransformState(label: "Filter 2 button")
             }
             .buttonStyle(FilterButtonStyle())
             .overlay(
@@ -470,7 +490,8 @@ struct ImageOutlinerView: View {
                 contrast = 2.5
                 curves = 1.8
                 lineBoldness = 2.0
-                updateProcessedImage() // Use updateProcessedImage
+                applyContentFilters()
+                printTransformState(label: "Filter 3 button")
             }
             .buttonStyle(FilterButtonStyle())
             .overlay(
@@ -492,11 +513,13 @@ struct ImageOutlinerView: View {
         }
         saveImageToPhotosLibrary(finalImageToSave)
         withAnimation { showSaveConfirmation = true }
+        printTransformState(label: "saveToPhotos")
     }
 
     func saveToFiles() {
         imageToExport = processedImage ?? inputImage
         isDocumentPickerPresented = true
+        printTransformState(label: "saveToFiles")
     }
 
     func saveImageToPhotosLibrary(_ image: UIImage) {
@@ -517,7 +540,11 @@ struct ImageOutlinerView: View {
     // Apply content filters only
     func applyContentFilters() {
         guard let inputImage = inputImage,
-              let cgImage = inputImage.cgImage else { return }
+              let cgImage = inputImage.cgImage else {
+            processedImage = nil // Reset processed image if no input
+            printTransformState(label: "applyContentFilters - no image")
+            return
+        }
 
         let ciImage = CIImage(cgImage: cgImage)
         var output = ciImage
@@ -561,39 +588,9 @@ struct ImageOutlinerView: View {
 
         if let cgimg = context.createCGImage(output, from: output.extent) {
             processedImage = UIImage(cgImage: cgimg)
-        }
-    }
-
-    // Apply geometry transformations only
-    func applyGeometryTransformations(to image: UIImage?) -> UIImage? {
-        guard let image = image, let cgImage = image.cgImage else { return nil }
-        let ciImage = CIImage(cgImage: cgImage)
-        var currentTransform = CGAffineTransform.identity
-
-        if rotationAngle != 0 {
-            currentTransform = currentTransform.rotated(by: CGFloat(rotationAngle * .pi / 180))
-        }
-        if flipHorizontal {
-            currentTransform = currentTransform.scaledBy(x: -1, y: 1)
-        }
-        if flipVertical {
-            currentTransform = currentTransform.concatenating(CGAffineTransform(scaleX: 1, y: -1))
-        }
-
-        let transformedImage = ciImage.transformed(by: currentTransform)
-
-        if let cgimg = context.createCGImage(transformedImage, from: transformedImage.extent) {
-            return UIImage(cgImage: cgimg)
-        }
-        return nil
-    }
-
-    // Combine content filters and geometry transformations
-    func updateProcessedImage() {
-        guard let inputImage = inputImage else { return }
-        processedImage = applyGeometryTransformations(to: inputImage)
-        if processedImage != nil {
-            applyContentFilters()
+            printTransformState(label: "applyContentFilters - success")
+        } else {
+            printTransformState(label: "applyContentFilters - failed cgimg creation")
         }
     }
 
@@ -602,10 +599,10 @@ struct ImageOutlinerView: View {
         lastScale = 1.0
         offset = .zero
         lastOffset = .zero
-        rotationAngle = 0.0
-        flipHorizontal = false
-        flipVertical = false
-        // Consider: Reset filter adjustments here as well?
+        rotationAngle = 0.0 // CRITICAL: Ensure this is 0
+        flipHorizontal = false // CRITICAL: Ensure this is false
+        flipVertical = false // CRITICAL: Ensure this is false
+        printTransformState(label: "resetTransformations")
     }
 
     func sliderWithValue(label: String, value: Binding<Float>, range: ClosedRange<Float>, showInfoMode: Bool) -> some View {
@@ -628,7 +625,10 @@ struct ImageOutlinerView: View {
                 Spacer()
             }
             Slider(value: value, in: range)
-                .onChange(of: value.wrappedValue) { _ in updateProcessedImage() } // Call updateProcessedImage
+                .onChange(of: value.wrappedValue) { _ in
+                    applyContentFilters()
+                    printTransformState(label: "slider.onChange - \(label)")
+                }
                 .contentShape(Rectangle())
         }
     }
@@ -636,193 +636,205 @@ struct ImageOutlinerView: View {
 
 // MARK: - Button Styles
 
-struct EraseButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .background(Color.purple)
-            .foregroundColor(.white)
-            .cornerRadius(8)
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
-            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
-    }
-}
-
-struct PrimaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .frame(maxWidth: .infinity)
-            .padding()
-            .background(Color.blue)
-            .foregroundColor(.white)
-            .cornerRadius(10)
-            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
-    }
-}
-
-struct SecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .frame(maxWidth: .infinity)
-            .padding()
-            .background(Color.gray.opacity(0.5))
-            .foregroundColor(.white)
-            .cornerRadius(10)
-            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
-    }
-}
-
-struct SmallPrimaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .background(Color.blue)
-            .foregroundColor(.white)
-            .cornerRadius(8)
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
-            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
-    }
-}
-
-struct SmallSecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .background(Color.gray.opacity(0.5))
-            .foregroundColor(.white)
-            .cornerRadius(8)
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
-            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
-    }
-}
-
-struct PresetButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 15)
-            .padding(.vertical, 8)
-            .background(Color.teal.opacity(0.7))
-            .foregroundColor(.white)
-            .cornerRadius(6)
-            .font(.subheadline)
-    }
-}
-
-struct SaveButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .background(Color.green)
-            .foregroundColor(.white)
-            .cornerRadius(8)
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
-            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
-    }
-}
-
-struct PrintButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .background(Color.green)
-            .foregroundColor(.white)
-            .cornerRadius(8)
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
-            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
-    }
-}
-
-struct FilterButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 15)
-            .padding(.vertical, 8)
-            .background(Color.mint.opacity(0.7))
-            .foregroundColor(.white)
-            .cornerRadius(6)
-            .font(.subheadline)
-    }
-}
+// ... (Button Styles - No changes needed)
 
 // MARK: - Info Label
 
-func iconWithInfoLabel(
-    iconName: String,
-    action: @escaping () -> Void,
-    labelText: String,
-    iconSize: CGFloat,
-    showInfoMode: Bool,
-    labelSide: Alignment = .trailing
-) -> some View {
-    Button(action: action) {
-        ZStack {
-            // Icon underneath the label
-            Image(systemName: iconName)
-                .resizable()
-                .scaledToFit()
-                .frame(width: iconSize, height: iconSize)
-
-            // Label over the icon
-            InfoLabel(
-                text: labelText,
-                color: .white.opacity(0.9),
-                side: labelSide,
-                width: 100,
-                showInfoMode: showInfoMode
-            )
-            .opacity(showInfoMode ? 1 : 0)
-        }
-    }
-}
-
-struct InfoLabel: View {
-    let text: String
-    let color: Color
-    let side: Alignment
-    let width: CGFloat
-    let showInfoMode: Bool
-
-    var body: some View {
-        Text(text)
-            .font(.caption)
-            .padding(6)
-            .background(color)
-            .foregroundColor(.black)
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(.gray), lineWidth: 1))
-            .frame(width: width)
-            .fixedSize()
-            .offset(infoLabelOffset(for: side))
-            .opacity(showInfoMode ? 1 : 0)
-    }
-
-    private func infoLabelOffset(for side: Alignment) -> CGSize {
-        switch side {
-        case .leading:
-            return CGSize(width: -80, height: 0)
-        case .trailing:
-            return CGSize(width: 5, height: -20)
-        case .top:
-            return CGSize(width: 5, height: -30)
-        case .bottom:
-            return CGSize(width: 0, height: 30)
-        default:
-            return .zero
-        }
-    }
-}
+// ... (Info Label - No changes needed)
 
 // MARK: - Alignment Extension
 
-extension Alignment {
-    static let leading = Alignment(horizontal: .leading, vertical: .center)
-    static let trailing = Alignment(horizontal: .trailing, vertical: .center)
-    static let top = Alignment(horizontal: .center, vertical: .top)
-    static let bottom = Alignment(horizontal: .center, vertical: .bottom)
-}
+// ... (Alignment Extension - No changes needed)
+
+                // MARK: - Button Styles
+
+                struct EraseButtonStyle: ButtonStyle {
+                    func makeBody(configuration: Configuration) -> some View {
+                        configuration.label
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 10)
+                            .background(Color.purple)
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
+                            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
+                    }
+                }
+
+                struct PrimaryButtonStyle: ButtonStyle {
+                    func makeBody(configuration: Configuration) -> some View {
+                        configuration.label
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+                            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
+                    }
+                }
+
+                struct SecondaryButtonStyle: ButtonStyle {
+                    func makeBody(configuration: Configuration) -> some View {
+                        configuration.label
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.gray.opacity(0.5))
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+                            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
+                    }
+                }
+
+                struct SmallPrimaryButtonStyle: ButtonStyle {
+                    func makeBody(configuration: Configuration) -> some View {
+                        configuration.label
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 10)
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
+                            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
+                    }
+                }
+
+                struct SmallSecondaryButtonStyle: ButtonStyle {
+                    func makeBody(configuration: Configuration) -> some View {
+                        configuration.label
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 10)
+                            .background(Color.gray.opacity(0.5))
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
+                            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
+                    }
+                }
+
+                struct PresetButtonStyle: ButtonStyle {
+                    func makeBody(configuration: Configuration) -> some View {
+                        configuration.label
+                            .padding(.horizontal, 15)
+                            .padding(.vertical, 8)
+                            .background(Color.teal.opacity(0.7))
+                            .foregroundColor(.white)
+                            .cornerRadius(6)
+                            .font(.subheadline)
+                    }
+                }
+
+                struct SaveButtonStyle: ButtonStyle {
+                    func makeBody(configuration: Configuration) -> some View {
+                        configuration.label
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 10)
+                            .background(Color.green)
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
+                            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
+                    }
+                }
+
+                struct PrintButtonStyle: ButtonStyle {
+                    func makeBody(configuration: Configuration) -> some View {
+                        configuration.label
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 10)
+                            .background(Color.green)
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
+                            .animation(.easeOut(duration: 0.2), value: configuration.isPressed)
+                    }
+                }
+
+                struct FilterButtonStyle: ButtonStyle {
+                    func makeBody(configuration: Configuration) -> some View {
+                        configuration.label
+                            .padding(.horizontal, 15)
+                            .padding(.vertical, 8)
+                            .background(Color.mint.opacity(0.7))
+                            .foregroundColor(.white)
+                            .cornerRadius(6)
+                            .font(.subheadline)
+                    }
+                }
+
+                // MARK: - Info Label
+
+                func iconWithInfoLabel(
+                    iconName: String,
+                    action: @escaping () -> Void,
+                    labelText: String,
+                    iconSize: CGFloat,
+                    showInfoMode: Bool,
+                    labelSide: Alignment = .trailing
+                ) -> some View {
+                    Button(action: action) {
+                        ZStack {
+                            // Icon underneath the label
+                            Image(systemName: iconName)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: iconSize, height: iconSize)
+
+                            // Label over the icon
+                            InfoLabel(
+                                text: labelText,
+                                color: .white.opacity(0.9),
+                                side: labelSide,
+                                width: 100,
+                                showInfoMode: showInfoMode
+                            )
+                            .opacity(showInfoMode ? 1 : 0)
+                        }
+                    }
+                }
+
+                struct InfoLabel: View {
+                    let text: String
+                    let color: Color
+                    let side: Alignment
+                    let width: CGFloat
+                    let showInfoMode: Bool
+
+                    var body: some View {
+                        Text(text)
+                            .font(.caption)
+                            .padding(6)
+                            .background(color)
+                            .foregroundColor(.black)
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(.gray), lineWidth: 1))
+                            .frame(width: width)
+                            .fixedSize()
+                            .offset(infoLabelOffset(for: side))
+                            .opacity(showInfoMode ? 1 : 0)
+                    }
+
+                    private func infoLabelOffset(for side: Alignment) -> CGSize {
+                        switch side {
+                        case .leading:
+                            return CGSize(width: -80, height: 0)
+                        case .trailing:
+                            return CGSize(width: 5, height: -20)
+                        case .top:
+                            return CGSize(width: 5, height: -30)
+                        case .bottom:
+                            return CGSize(width: 0, height: 30)
+                        default:
+                            return .zero
+                        }
+                    }
+                }
+
+                // MARK: - Alignment Extension
+
+                extension Alignment {
+                    static let leading = Alignment(horizontal: .leading, vertical: .center)
+                    static let trailing = Alignment(horizontal: .trailing, vertical: .center)
+                    static let top = Alignment(horizontal: .center, vertical: .top)
+                    static let bottom = Alignment(horizontal: .center, vertical: .bottom)
+                }
